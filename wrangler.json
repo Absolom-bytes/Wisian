@@ -1,0 +1,10 @@
+{
+  "name": "espark",
+  "compatibility_date": "2025-02-01",
+  "assets": {
+    "directory": "out"
+  },
+  "observability": {
+    "enabled": true
+  }
+}
