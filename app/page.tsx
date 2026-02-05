@@ -1,422 +1,384 @@
+
 "use client";
 
 import { GoogleGenAI } from '@google/genai';
 import React, { useState, useEffect } from 'react';
 import { TOOLS_CONFIG, TOOL_CATEGORIES } from '../constants';
-import { ToolConfig } from '../types';
+import { ToolConfig, Artifact, LabAsset, GroundingSource } from '../types';
 import { ThinkingIcon } from './components/Icons';
-import DottedGlowBackground from './components/DottedGlowBackground';
 import SideDrawer from './components/SideDrawer';
-import ArtifactCard from './ArtifactCard';
-import { Artifact } from '../types';
+import ArtifactCard from './components/ArtifactCard';
 import ToolCreator from './components/ToolCreator';
 
-interface SavedResource {
-  id: string;
-  toolName: string;
-  categoryName: string;
-  content: string;
-  timestamp: number;
-  type: 'text' | 'artifact';
-}
-
 export default function Home() {
+  const [activeTab, setActiveTab] = useState<'resources' | 'visuals'>('resources');
   const [activeCategory, setActiveCategory] = useState(TOOL_CATEGORIES[0].id);
   const [allTools, setAllTools] = useState<ToolConfig[]>(TOOLS_CONFIG);
   const [selectedTool, setSelectedTool] = useState<ToolConfig>(TOOLS_CONFIG[0]);
   const [promptInput, setPromptInput] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [output, setOutput] = useState('');
+  const [sources, setSources] = useState<GroundingSource[]>([]);
   const [currentArtifact, setCurrentArtifact] = useState<Artifact | null>(null);
-  const [savedResources, setSavedResources] = useState<SavedResource[]>([]);
-  const [showHistory, setShowHistory] = useState(false);
-  const [showCopySuccess, setShowCopySuccess] = useState(false);
-  const [isToolCreatorOpen, setIsToolCreatorOpen] = useState(false);
-  const [sparkStatus, setSparkStatus] = useState<'connected' | 'offline'>('offline');
+  const [labAssets, setLabAssets] = useState<LabAsset[]>([]);
   
+  // Image Settings
+  const [imageSize, setImageSize] = useState<'1K' | '2K' | '4K'>('1K');
+  const [aspectRatio, setAspectRatio] = useState<'1:1' | '16:9' | '9:16'>('16:9');
+  
+  const [showHistory, setShowHistory] = useState(false);
+  const [isToolCreatorOpen, setIsToolCreatorOpen] = useState(false);
+
   useEffect(() => {
-    // Verify environment key presence
-    const key = process.env.API_KEY;
-    if (key && key !== "undefined" && key.length > 0) {
-      setSparkStatus('connected');
-    } else {
-      setSparkStatus('offline');
-    }
-
-    const history = localStorage.getItem('everyspark_vault');
-    if (history) {
-      try {
-        setSavedResources(JSON.parse(history));
-      } catch (e) {
-        console.error("Vault loading failed", e);
-      }
-    }
-
-    const customToolsStore = localStorage.getItem('everyspark_custom_tools');
-    if (customToolsStore) {
-        try {
-            const parsed = JSON.parse(customToolsStore);
-            setAllTools([...TOOLS_CONFIG, ...parsed]);
-        } catch (e) {
-            console.error("Custom tools loading failed", e);
-        }
-    }
+    const savedAssets = localStorage.getItem('everyspark_lab_assets');
+    if (savedAssets) setLabAssets(JSON.parse(savedAssets));
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('everyspark_vault', JSON.stringify(savedResources));
-  }, [savedResources]);
+    localStorage.setItem('everyspark_lab_assets', JSON.stringify(labAssets));
+  }, [labAssets]);
 
-  useEffect(() => {
-    const firstOfCat = allTools.find(t => t.categoryId === activeCategory);
-    if (firstOfCat) setSelectedTool(firstOfCat);
-  }, [activeCategory, allTools]);
-
-  const handleAddCustomTool = (newTool: ToolConfig) => {
-      const updatedTools = [...allTools, newTool];
-      setAllTools(updatedTools);
-      
-      const customOnly = updatedTools.filter(t => t.isCustom);
-      localStorage.setItem('everyspark_custom_tools', JSON.stringify(customOnly));
-      
-      // Auto-select the new tool's category and the tool itself
-      setActiveCategory(newTool.categoryId);
-      setSelectedTool(newTool);
+  const handleApiKeyPrompt = async () => {
+    if (typeof window !== 'undefined' && (window as any).aistudio) {
+      await (window as any).aistudio.openSelectKey();
+      return true;
+    }
+    return false;
   };
 
-  const handleGenerate = async () => {
-    if (isGenerating) return;
-
-    const apiKey = process.env.API_KEY;
-    
-    if (!apiKey || apiKey === "undefined") {
-      setOutput("### Spark Signal Lost\nThe system API key (API_KEY) is missing or configured incorrectly. Please check your environment variables.");
-      setSparkStatus('offline');
-      return;
-    }
-
+  const handleGenerateResource = async () => {
     setIsGenerating(true);
     setOutput('');
-    setCurrentArtifact(null);
-    setSparkStatus('connected');
+    setSources([]);
     
-    const terminal = document.getElementById('engine-output');
-    if (terminal) terminal.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Create immediate placeholder artifact to trigger card UI
+    const tempId = Date.now().toString();
+    const draftArtifact: Artifact = { 
+        id: tempId, 
+        styleName: selectedTool.name, 
+        html: '', 
+        status: 'streaming' 
+    };
+    setCurrentArtifact(draftArtifact);
 
     try {
-      const ai = new GoogleGenAI({ apiKey });
+      const apiKey = process.env.API_KEY;
+      const isGeography = selectedTool.id === 'geography-explorer' || promptInput.toLowerCase().includes('location') || promptInput.toLowerCase().includes('near');
       
-      const systemInstruction = `
-        You are EverySpark AI, the premier Teacher's AI Toolset generator for South African public schools.
-        
-        STRICT RULES:
-        1. ALWAYS align with CAPS (Curriculum and Assessment Policy Statement).
-        2. NEVER mention API keys or system configuration.
-        3. For "Rubric Architect" or "Interactive Quiz Master" (or similar custom interactive tools), output a single-file, professional HTML/CSS solution wrapped in <html> tags. 
-        4. Use a clean, educational aesthetic with Slate and Gold accents in any HTML generated.
-        5. For text assets, use rigorous Markdown with ### headers and bold key terms.
-        6. Always address South African context (Grade levels, Terminology like "Learners" vs "Students", Assessment tasks).
-      `.trim();
+      // Initialize GoogleGenAI right before use to ensure the latest API key is used
+      const ai = new GoogleGenAI({ apiKey: apiKey! });
+      
+      const config: any = {
+        tools: isGeography ? [{ googleSearch: {} }, { googleMaps: {} }] : [{ googleSearch: {} }],
+        systemInstruction: "Align with SA CAPS standards. Use professional Markdown. For geography queries, use Google Maps grounding to provide specific place URLs and review snippets. If the output involves interactive components, wrap them in valid, self-contained HTML/CSS/JS."
+      };
 
-      const userPrompt = `
-        STRATEGIC DOMAIN: ${activeCategory}
-        MODULE: ${selectedTool.name}
-        USER INPUT: ${promptInput || 'Standard high-fidelity implementation'}
-        GUIDING LOGIC: ${selectedTool.basePrompt}
-        
-        Generate the educational asset now. If this tool requires an interactive component (like a quiz or table), ensure you provide the full HTML.
-      `.trim();
-
-      const responseStream = await ai.models.generateContentStream({
-        model: 'gemini-3-flash-preview',
-        contents: userPrompt,
-        config: {
-          systemInstruction,
-          temperature: 0.65,
+      if (isGeography && navigator.geolocation) {
+        try {
+          const pos = await new Promise<GeolocationPosition>((res, rej) => 
+            navigator.geolocation.getCurrentPosition(res, rej, { timeout: 5000 })
+          );
+          config.toolConfig = {
+            retrievalConfig: {
+              latLng: {
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude
+              }
+            }
+          };
+        } catch (e) {
+          console.warn("Geolocation access omitted:", e);
         }
+      }
+
+      const response = await ai.models.generateContent({
+        // Fix: Use 'gemini-2.5-flash' for maps grounding as per library requirements
+        model: isGeography ? 'gemini-2.5-flash' : 'gemini-3-flash-preview',
+        contents: `Domain: ${activeCategory}. Tool: ${selectedTool.name}. Request: ${promptInput || selectedTool.examplePrompt}. Logic: ${selectedTool.basePrompt}`,
+        config
       });
 
-      let accumulatedText = '';
-      for await (const chunk of responseStream) {
-        const text = chunk.text;
-        accumulatedText += text;
-        setOutput(accumulatedText);
-
-        // Interactive Artifact Detection
-        if (accumulatedText.includes('<!DOCTYPE html>') || accumulatedText.includes('<html')) {
-            const htmlMatch = accumulatedText.match(/<html[\s\S]*<\/html>/i);
-            if (htmlMatch) {
-                setCurrentArtifact({
-                    id: 'asset-' + Date.now(),
-                    styleName: selectedTool.name,
-                    html: htmlMatch[0],
-                    status: 'streaming'
-                });
-            }
-        }
+      const text = response.text || '';
+      setOutput(text);
+      
+      const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+      if (chunks) {
+        const extracted = chunks.map((c: any) => {
+          if (c.web) return { title: c.web.title || 'Web Source', uri: c.web.uri };
+          if (c.maps) return { title: c.maps.title || 'Place Detail', uri: c.maps.uri };
+          return null;
+        }).filter(Boolean);
+        setSources(extracted);
       }
 
-      if (currentArtifact) {
-          setCurrentArtifact(prev => prev ? { ...prev, status: 'complete' } : null);
+      const match = text.match(/<html[\s\S]*<\/html>/i);
+      if (match) {
+        setCurrentArtifact({ 
+            id: tempId, 
+            styleName: selectedTool.name, 
+            html: match[0], 
+            status: 'complete' 
+        });
+      } else {
+        // If no HTML was generated, we can either clear it or wrap the text in a basic HTML shell
+        const textToHtml = `<html><body style="font-family: sans-serif; padding: 2rem; color: #334155; line-height: 1.6;">${text.replace(/\n/g, '<br>')}</body></html>`;
+        setCurrentArtifact({ 
+            id: tempId, 
+            styleName: selectedTool.name, 
+            html: textToHtml, 
+            status: 'complete' 
+        });
       }
-
-      const newResource: SavedResource = {
-        id: Date.now().toString(),
-        toolName: selectedTool.name,
-        categoryName: TOOL_CATEGORIES.find(c => c.id === activeCategory)?.name || '',
-        content: accumulatedText,
-        timestamp: Date.now(),
-        type: currentArtifact ? 'artifact' : 'text'
-      };
-      setSavedResources(prev => [newResource, ...prev].slice(0, 20));
-
-    } catch (error: any) {
-      console.error("Spark Execution Error:", error);
-      setOutput("### Network Latency Error\nThe Spark engine timed out. Please retry the generation.");
+    } catch (e: any) {
+      console.error(e);
+      if (e.message?.includes("Requested entity was not found")) {
+        await handleApiKeyPrompt();
+      }
+      setCurrentArtifact({ ...draftArtifact, status: 'error' });
+      setOutput("### Spark Latency Error\nGeneration failed. Ensure your API key is configured correctly.");
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const copyContent = () => {
-    navigator.clipboard.writeText(output);
-    setShowCopySuccess(true);
-    setTimeout(() => setShowCopySuccess(false), 2000);
+  const handleGenerateImage = async () => {
+    setIsGenerating(true);
+    try {
+      const apiKey = process.env.API_KEY;
+      // Initialize GoogleGenAI right before use to ensure the latest API key is used
+      const ai = new GoogleGenAI({ apiKey: apiKey! });
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-pro-image-preview',
+        contents: { parts: [{ text: promptInput }] },
+        config: { 
+          imageConfig: { aspectRatio: aspectRatio as any, imageSize },
+          tools: [{ googleSearch: {} }]
+        }
+      });
+
+      for (const part of response.candidates?.[0].content.parts || []) {
+        if (part.inlineData) {
+          const newAsset: LabAsset = {
+            id: Date.now().toString(),
+            type: 'image',
+            url: `data:image/png;base64,${part.inlineData.data}`,
+            prompt: promptInput,
+            timestamp: Date.now()
+          };
+          setLabAssets([newAsset, ...labAssets]);
+        }
+      }
+    } catch (e: any) {
+      console.error(e);
+      if (e.message?.includes("Requested entity was not found")) {
+        await handleApiKeyPrompt();
+      }
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans selection:bg-amber-200">
-      <nav className="h-20 bg-white/95 backdrop-blur-lg sticky top-0 z-[60] border-b border-slate-200 px-6 shadow-sm">
-        <div className="max-w-7xl mx-auto h-full flex justify-between items-center">
-            <div className="flex items-center gap-3 cursor-pointer group" onClick={() => window.scrollTo({top:0, behavior:'smooth'})}>
-                <div className="bg-slate-900 p-2 rounded-lg group-hover:bg-amber-500 transition-colors shadow-lg">
-                    <i className="fa-solid fa-bolt-lightning text-amber-400 group-hover:text-slate-900"></i>
-                </div>
-                <span className="font-black text-2xl tracking-tighter uppercase text-slate-900">Every<span className="text-amber-500">Spark</span></span>
-            </div>
-            <div className="hidden md:flex items-center gap-6">
-                <div className="flex items-center gap-2 px-3 py-1 bg-slate-100 rounded-full border border-slate-200">
-                    <div className={`w-2 h-2 rounded-full ${sparkStatus === 'connected' ? 'bg-green-500' : 'bg-red-500 animate-pulse'}`}></div>
-                    <span className="text-[10px] font-black uppercase text-slate-500 tracking-widest">{sparkStatus === 'connected' ? 'Engine Ready' : 'Offline'}</span>
-                </div>
-                <button onClick={() => setShowHistory(true)} className="text-xs font-black text-slate-600 hover:text-amber-600 transition flex items-center gap-2 uppercase tracking-widest">
-                    <i className="fa-solid fa-folder-open"></i> Vault
-                </button>
-                <div className="h-6 w-px bg-slate-200"></div>
-                <a href="https://www.backabuddy.co.za" target="_blank" rel="noopener noreferrer" className="bg-slate-900 text-white px-6 py-2.5 rounded-full font-black text-[10px] hover:bg-amber-500 hover:text-slate-900 transition-all uppercase tracking-widest shadow-md active:scale-95">
-                    Impact Hub
-                </a>
-            </div>
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans selection:bg-amber-200">
+      <nav className="h-20 bg-white/95 backdrop-blur-lg sticky top-0 z-[60] border-b border-slate-200 px-6 shadow-sm flex items-center justify-between">
+        <div className="flex items-center gap-3 group cursor-pointer" onClick={() => window.scrollTo({top:0, behavior:'smooth'})}>
+          <div className="bg-slate-900 p-2 rounded-lg group-hover:bg-amber-500 transition-colors shadow-lg">
+            <i className="fa-solid fa-bolt-lightning text-amber-400 group-hover:text-slate-900"></i>
+          </div>
+          <span className="font-black text-2xl uppercase tracking-tighter">Every<span className="text-amber-500">Spark</span></span>
         </div>
-        <div className="sa-accent absolute bottom-0 left-0 right-0 h-[3px]"></div>
+        
+        <div className="flex gap-1 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
+          <button onClick={() => setActiveTab('resources')} className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition ${activeTab === 'resources' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}>Resource Engine</button>
+          <button onClick={() => setActiveTab('visuals')} className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition ${activeTab === 'visuals' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}>Visual Lab</button>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <button onClick={handleApiKeyPrompt} className="text-[10px] font-black uppercase tracking-widest bg-slate-100 text-slate-600 px-4 py-2 rounded-full hover:bg-slate-200 transition-all border border-slate-200">
+            <i className="fa-solid fa-cog mr-2"></i> System Key
+          </button>
+          <button onClick={() => setShowHistory(true)} className="text-xs font-black text-slate-600 hover:text-amber-600 uppercase tracking-widest flex items-center gap-2">
+            <i className="fa-solid fa-layer-group"></i> Vault
+          </button>
+        </div>
       </nav>
 
-      <header className="premium-gradient text-white py-32 relative overflow-hidden">
-        <DottedGlowBackground opacity={0.3} gap={28} speedScale={0.4} />
-        <div className="max-w-7xl mx-auto px-6 relative z-10">
-            <div className="max-w-3xl">
-                <div className="inline-block bg-amber-500/20 text-amber-400 px-4 py-1.5 rounded-full text-[10px] font-black tracking-[0.2em] uppercase mb-8 border border-amber-500/30">
-                    Propelling SA Education Forward
+      <main className="flex-1 max-w-7xl mx-auto w-full p-6 lg:p-12">
+        <div className="grid lg:grid-cols-12 gap-12">
+          <div className="lg:col-span-4 space-y-8">
+            {activeTab === 'resources' && (
+              <div className="space-y-8 animate-in fade-in duration-500">
+                <section>
+                  <label className="text-[10px] font-black uppercase text-slate-400 mb-4 block">Target Category</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {TOOL_CATEGORIES.map(cat => (
+                      <button key={cat.id} onClick={() => setActiveCategory(cat.id)} className={`p-4 rounded-2xl border-2 transition ${activeCategory === cat.id ? 'bg-slate-900 text-white border-slate-900 shadow-lg' : 'bg-white border-transparent text-slate-400 hover:border-amber-200'}`}>
+                        <i className={`fa-solid ${cat.icon} mb-2 block text-lg`}></i>
+                        <span className="text-[9px] font-black uppercase tracking-tight">{cat.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+                <section>
+                  <label className="text-[10px] font-black uppercase text-slate-400 mb-4 block">Module Selection</label>
+                  <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar pr-2">
+                    {allTools.filter(t => t.categoryId === activeCategory).map(tool => (
+                      <button key={tool.id} onClick={() => setSelectedTool(tool)} className={`w-full text-left p-4 rounded-xl border-2 transition ${selectedTool.id === tool.id ? 'bg-amber-50 border-amber-500 text-slate-900 shadow-sm' : 'bg-white border-transparent text-slate-500 hover:bg-slate-50'}`}>
+                        <div className="text-[10px] font-black uppercase">{tool.name}</div>
+                        <p className="text-[9px] font-medium opacity-60 mt-1 line-clamp-1">{tool.description}</p>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {activeTab === 'visuals' && (
+              <div className="space-y-8 animate-in slide-in-from-left duration-300">
+                <section>
+                  <label className="text-[10px] font-black uppercase text-slate-400 mb-4 block">Fidelity & Aspect</label>
+                  <div className="grid grid-cols-3 gap-2 mb-4">
+                    {['1K', '2K', '4K'].map(s => (
+                      <button key={s} onClick={() => setImageSize(s as any)} className={`py-3 rounded-xl font-black text-[10px] border-2 transition ${imageSize === s ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-400'}`}>{s}</button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {['1:1', '16:9', '9:16'].map(r => (
+                      <button key={r} onClick={() => setAspectRatio(r as any)} className={`py-3 rounded-xl font-black text-[10px] border-2 transition ${aspectRatio === r ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-400'}`}>{r}</button>
+                    ))}
+                  </div>
+                </section>
+                <div className="p-5 rounded-2xl bg-amber-50 border border-amber-200">
+                   <p className="text-[10px] font-bold text-amber-700 leading-relaxed uppercase">
+                     <i className="fa-solid fa-circle-info mr-2"></i>
+                     Generating diagrams for lesson plans improves retention by up to 60%.
+                   </p>
                 </div>
-                <h1 className="text-6xl lg:text-8xl font-black mb-8 leading-[0.9] tracking-tighter">
-                    AI Toolset for <br/><span className="spark-accent italic">Elite Educators.</span>
-                </h1>
-                <p className="text-xl text-slate-300 mb-12 leading-relaxed font-medium max-w-2xl">
-                    Experience a frictionless suite of tools powered by Gemini. Generate CAPS-ready rubrics, differentiated content, and interactive assessments in seconds.
-                </p>
-                <button onClick={() => document.getElementById('demo')?.scrollIntoView({behavior:'smooth'})} className="bg-amber-500 text-slate-900 px-10 py-5 rounded-2xl font-black text-lg hover:scale-105 transition shadow-2xl hover:bg-white active:scale-95 flex items-center gap-3">
-                    <i className="fa-solid fa-microchip"></i> OPEN TEACHER SUITE
-                </button>
-            </div>
-        </div>
-      </header>
+              </div>
+            )}
 
-      <section id="demo" className="py-24 bg-white scroll-mt-20">
-        <div className="max-w-7xl mx-auto px-6">
-            <div className="grid lg:grid-cols-12 gap-12 bg-slate-50 rounded-[3rem] p-6 lg:p-12 border border-slate-200 shadow-xl">
-                
-                {/* Configuration Sidebar */}
-                <div className="lg:col-span-4 space-y-8">
-                    <div>
-                        <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-4 block">1. Select Strategic Domain</label>
-                        <div className="grid grid-cols-2 gap-2">
-                            {TOOL_CATEGORIES.map(cat => (
-                                <button 
-                                    key={cat.id} 
-                                    onClick={() => setActiveCategory(cat.id)}
-                                    className={`p-4 rounded-2xl transition-all border-2 flex flex-col items-center gap-2 ${activeCategory === cat.id ? 'bg-slate-900 text-white border-slate-900 shadow-lg' : 'bg-white text-slate-400 border-white hover:border-amber-200'}`}
-                                >
-                                    <i className={`fa-solid ${cat.icon} text-lg`}></i>
-                                    <span className="text-[10px] font-black uppercase tracking-tight">{cat.name}</span>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
+            <section>
+              <label className="text-[10px] font-black uppercase text-slate-400 mb-4 block">Instructional Context</label>
+              <textarea value={promptInput} onChange={e => setPromptInput(e.target.value)} placeholder={activeTab === 'resources' ? selectedTool.examplePrompt : "e.g. A cross-section diagram of the human heart for Grade 12 Biology..."} className="w-full h-40 p-5 rounded-2xl bg-white border border-slate-200 shadow-inner resize-none text-sm font-medium focus:ring-4 focus:ring-amber-500/20 outline-none transition" />
+            </section>
 
-                    <div>
-                        <div className="flex justify-between items-center mb-4">
-                            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 block">2. Select Lab Module</label>
-                            <button 
-                                onClick={() => setIsToolCreatorOpen(true)} 
-                                className="text-[10px] font-black uppercase tracking-widest text-amber-600 hover:text-amber-500 flex items-center gap-2 transition-colors px-3 py-1 rounded-full bg-amber-50 hover:bg-amber-100"
-                            >
-                                <i className="fa-solid fa-wand-magic-sparkles"></i> Build Custom
-                            </button>
-                        </div>
-                        <div className="space-y-2 max-h-56 overflow-y-auto pr-2 custom-scrollbar">
-                            {allTools.filter(t => t.categoryId === activeCategory).map(tool => (
-                                <button 
-                                    key={tool.id}
-                                    onClick={() => setSelectedTool(tool)}
-                                    className={`w-full text-left p-4 rounded-xl text-sm font-bold border-2 transition-all flex justify-between items-center ${selectedTool.id === tool.id ? 'border-amber-500 bg-amber-50 text-slate-900 shadow-sm' : 'border-transparent bg-white text-slate-500 hover:bg-slate-100'}`}
-                                >
-                                    <span className="flex flex-col">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-xs font-black uppercase tracking-tight">{tool.name}</span>
-                                            {tool.isCustom && <span className="text-[8px] bg-slate-100 text-slate-400 px-1 rounded uppercase tracking-wider">Custom</span>}
-                                        </div>
-                                        <span className="text-[10px] opacity-60 font-medium leading-tight mt-1">{tool.description}</span>
-                                    </span>
-                                    {selectedTool.id === tool.id && <i className="fa-solid fa-circle-play text-amber-500"></i>}
-                                </button>
-                            ))}
-                            {allTools.filter(t => t.categoryId === activeCategory).length === 0 && (
-                                <div className="p-4 text-center text-xs text-slate-400 italic">
-                                    No tools available. Try building one!
+            <button onClick={activeTab === 'resources' ? handleGenerateResource : handleGenerateImage} disabled={isGenerating} className={`w-full py-6 rounded-2xl font-black text-lg transition-all flex items-center justify-center gap-4 ${isGenerating ? 'bg-slate-200 text-slate-400' : 'bg-slate-900 text-white hover:bg-amber-500 hover:text-slate-900 hover:scale-[1.02] shadow-xl active:scale-95'}`}>
+              {isGenerating ? <ThinkingIcon /> : <i className="fa-solid fa-atom"></i>}
+              {isGenerating ? 'SYNTHESIZING...' : 'GENERATE ASSET'}
+            </button>
+          </div>
+
+          <div className="lg:col-span-8 bg-white rounded-[3rem] border border-slate-200 shadow-xl overflow-hidden flex flex-col min-h-[700px]">
+             <div className="bg-slate-900 px-8 py-5 text-white flex justify-between items-center border-b border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className="flex gap-1">
+                    <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                    <div className="w-2 h-2 rounded-full bg-amber-500"></div>
+                    <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                  </div>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Educational Terminal: {activeTab.toUpperCase()}</span>
+                </div>
+                <div className="text-[10px] font-black uppercase text-amber-500 animate-pulse tracking-widest">Pipeline Ready</div>
+             </div>
+
+             <div className="flex-1 p-8 lg:p-12 overflow-y-auto custom-scrollbar">
+                {activeTab === 'resources' ? (
+                  currentArtifact ? (
+                    <div className="animate-in fade-in zoom-in-95 duration-500">
+                        <ArtifactCard artifact={currentArtifact} isFocused={true} onClick={() => {}} />
+                        {sources.length > 0 && !isGenerating && (
+                            <div className="mt-16 pt-10 border-t border-slate-100 bg-slate-50/50 -mx-12 px-12 pb-12">
+                                <h4 className="text-[10px] font-black uppercase text-slate-400 mb-6 tracking-widest">Grounding Citations</h4>
+                                <div className="flex flex-wrap gap-3">
+                                    {sources.map((s, i) => (
+                                    <a key={i} href={s.uri} target="_blank" rel="noreferrer" className="text-[10px] font-bold bg-white border border-slate-200 hover:border-amber-400 hover:bg-amber-50 px-4 py-2 rounded-xl transition flex items-center gap-2 shadow-sm">
+                                        <i className={`fa-solid ${s.uri?.includes('google.com/maps') ? 'fa-location-dot text-red-500' : 'fa-globe text-blue-500'}`}></i>
+                                        {s.title}
+                                    </a>
+                                    ))}
                                 </div>
-                            )}
-                        </div>
-                    </div>
-
-                    <div>
-                        <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-4 block">3. Contextual Data</label>
-                        <div className="relative">
-                            <textarea 
-                                value={promptInput}
-                                onChange={(e) => setPromptInput(e.target.value)}
-                                placeholder={selectedTool.examplePrompt}
-                                className="w-full p-5 rounded-2xl border border-slate-200 bg-white focus:ring-4 focus:ring-amber-500/20 outline-none h-40 transition-all font-medium text-slate-700 shadow-inner resize-none text-sm leading-relaxed"
-                            />
-                        </div>
-                    </div>
-
-                    <button 
-                        onClick={handleGenerate}
-                        disabled={isGenerating || sparkStatus === 'offline'}
-                        className={`w-full py-6 rounded-2xl font-black text-xl transition-all flex items-center justify-center gap-4 ${isGenerating ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : sparkStatus === 'offline' ? 'bg-red-100 text-red-400 cursor-not-allowed' : 'bg-amber-500 text-slate-900 hover:scale-[1.02] shadow-xl hover:shadow-amber-500/20'}`}
-                    >
-                        {isGenerating ? <ThinkingIcon /> : <i className="fa-solid fa-atom"></i>}
-                        {isGenerating ? 'GENERATING...' : 'INITIATE SPARK'}
-                    </button>
-                </div>
-
-                {/* Output Window */}
-                <div id="engine-output" className="lg:col-span-8 bg-white rounded-[2.5rem] border border-slate-200 shadow-inner overflow-hidden flex flex-col min-h-[700px]">
-                    <div className="bg-slate-900 px-8 py-5 text-white flex justify-between items-center border-b border-slate-800">
-                        <div className="flex items-center gap-4">
-                            <div className="flex gap-1.5">
-                                <div className="w-2.5 h-2.5 rounded-full bg-red-500/80"></div>
-                                <div className="w-2.5 h-2.5 rounded-full bg-amber-500/80"></div>
-                                <div className="w-2.5 h-2.5 rounded-full bg-green-500/80"></div>
                             </div>
-                            <span className="text-[10px] font-black tracking-widest text-slate-400 uppercase ml-2">EverySpark Lab Result</span>
-                        </div>
-                        {output && !isGenerating && (
-                            <button onClick={copyContent} title="Copy Result" className="text-[10px] font-black bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded transition flex items-center gap-2">
-                                <i className={showCopySuccess ? "fa-solid fa-check text-green-400" : "fa-regular fa-copy"}></i>
-                                {showCopySuccess ? 'COPIED' : 'COPY'}
-                            </button>
                         )}
-                    </div>
-                    
-                    <div className="flex-1 p-8 lg:p-12 overflow-y-auto custom-scrollbar bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] bg-fixed">
-                        {currentArtifact ? (
-                            <div className="h-full">
-                                <ArtifactCard 
-                                    artifact={currentArtifact} 
-                                    isFocused={true} 
-                                    onClick={() => {}} 
-                                />
-                                <details className="mt-8 group">
-                                    <summary className="text-[10px] font-black uppercase text-slate-400 cursor-pointer list-none flex items-center gap-2 group-hover:text-amber-500 transition-colors">
-                                        <i className="fa-solid fa-code"></i> Developer Mode: Source Code
-                                    </summary>
-                                    <div className="mt-4 p-4 bg-slate-900 rounded-xl text-xs overflow-x-auto text-amber-500 font-mono border border-slate-800 shadow-inner">
-                                        {output}
-                                    </div>
-                                </details>
-                            </div>
-                        ) : (
-                            <div className="markdown-content max-w-3xl mx-auto">
-                                {!output && !isGenerating && (
-                                    <div className="h-full flex flex-col items-center justify-center text-center opacity-30 py-32">
-                                        <div className="w-24 h-24 rounded-full bg-slate-100 flex items-center justify-center mb-6">
-                                            <i className="fa-solid fa-microscope text-4xl text-slate-400"></i>
-                                        </div>
-                                        <h3 className="text-xl font-black text-slate-900 mb-2">Lab Module Inactive</h3>
-                                        <p className="font-medium text-slate-500 max-w-xs mx-auto">Select a Teacher Suite tool and provide topic details to synthesize a custom asset.</p>
-                                    </div>
-                                )}
-                                {output.split('\n').map((line, i) => {
-                                    if (line.startsWith('###')) return <h3 key={i} className="text-2xl font-black text-slate-900 mt-12 mb-6 border-b-4 border-amber-400 inline-block pb-1">{line.replace('###', '').trim()}</h3>;
-                                    if (line.trim().startsWith('**') && line.trim().endsWith('**')) return <h4 key={i} className="text-lg font-bold text-slate-800 mt-8 mb-3 uppercase tracking-tight">{line.replace(/\*\*/g, '').trim()}</h4>;
-                                    if (line.trim().startsWith('-') || line.trim().startsWith('*')) return <li key={i} className="ml-4 mb-3 text-slate-700 list-none flex items-start gap-3"><span className="text-amber-500 mt-1.5 text-[8px]"><i className="fa-solid fa-circle"></i></span><span className="text-base">{line.replace(/^[-*]/, '').trim()}</span></li>;
-                                    return line.trim() ? <p key={i} className="mb-5 text-slate-600 leading-relaxed font-medium text-base">{line}</p> : <div key={i} className="h-2"></div>;
-                                })}
+                        {isGenerating && (
+                            <div className="mt-8 text-center animate-pulse">
+                                <p className="text-[10px] font-black uppercase text-slate-400 tracking-[0.4em]">Optimizing Metadata...</p>
                             </div>
                         )}
                     </div>
-                </div>
-            </div>
-        </div>
-      </section>
-
-      <ToolCreator 
-        isOpen={isToolCreatorOpen} 
-        onClose={() => setIsToolCreatorOpen(false)} 
-        onSave={handleAddCustomTool} 
-      />
-
-      <SideDrawer isOpen={showHistory} onClose={() => setShowHistory(false)} title="The Spark Vault">
-        <div className="space-y-4">
-            {savedResources.length === 0 ? (
-                <div className="text-center py-20 opacity-30 flex flex-col items-center gap-4">
-                    <i className="fa-solid fa-box-open text-4xl"></i>
-                    <span className="italic font-bold">No assets stored in vault.</span>
-                </div>
-            ) : savedResources.map(res => (
-                <div key={res.id} onClick={() => { setOutput(res.content); setShowHistory(false); }} className="p-5 rounded-2xl border border-slate-100 hover:border-amber-400 cursor-pointer transition-all bg-white group shadow-sm hover:shadow-md">
-                    <div className="flex justify-between items-start mb-3 relative z-10">
-                        <span className="text-[9px] font-black uppercase tracking-widest text-white bg-slate-900 px-2 py-0.5 rounded-md">{res.categoryName}</span>
-                        <span className="text-[9px] text-slate-400 font-bold">{new Date(res.timestamp).toLocaleDateString()}</span>
+                  ) : (
+                    <div className="h-full flex flex-col items-center justify-center text-center opacity-10 grayscale pointer-events-none py-40">
+                      <i className="fa-solid fa-graduation-cap text-8xl mb-8"></i>
+                      <p className="font-black uppercase tracking-[0.3em] text-sm">Select a module to begin</p>
                     </div>
-                    <h4 className="font-extrabold text-slate-900 text-sm group-hover:text-amber-600 transition-colors mb-2 relative z-10">{res.toolName}</h4>
-                    <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed relative z-10">{res.content.replace(/[#*]/g, '').slice(0, 100)}...</p>
-                </div>
-            ))}
+                  )
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {isGenerating && labAssets.length === 0 && (
+                        <div className="col-span-full h-full flex flex-col items-center justify-center text-center py-40">
+                            <div className="text-amber-500 text-7xl mb-8 animate-pulse"><ThinkingIcon /></div>
+                            <h3 className="text-2xl font-black text-slate-900 mb-2 uppercase tracking-tight">Rendering High-Fidelity Visual</h3>
+                            <p className="text-slate-500 font-medium max-w-sm">Generating instructional diagrams with 4K resolution standards...</p>
+                        </div>
+                    )}
+                    {labAssets.map(asset => (
+                      <div key={asset.id} className="group relative rounded-[2rem] overflow-hidden border border-slate-200 shadow-xl bg-slate-100 aspect-square transition hover:shadow-amber-500/10 hover:border-amber-200">
+                        <img src={asset.url} className="w-full h-full object-cover transition duration-700 group-hover:scale-105" alt={asset.prompt} />
+                        <div className="absolute inset-0 bg-slate-900/90 opacity-0 group-hover:opacity-100 transition duration-300 p-8 flex flex-col justify-end backdrop-blur-sm">
+                          <div className="text-[9px] font-black text-amber-500 uppercase tracking-widest mb-2">Visual Prompt</div>
+                          <p className="text-xs text-slate-300 font-medium line-clamp-4 mb-6 leading-relaxed italic">"{asset.prompt}"</p>
+                          <a href={asset.url} download className="bg-amber-500 text-slate-900 py-3 rounded-2xl text-[10px] font-black uppercase text-center hover:bg-amber-400 transition transform hover:-translate-y-1 shadow-lg">Download 4K Asset</a>
+                        </div>
+                      </div>
+                    ))}
+                    {!isGenerating && labAssets.length === 0 && (
+                       <div className="col-span-full py-40 text-center opacity-10 grayscale pointer-events-none">
+                          <i className="fa-solid fa-palette text-8xl mb-8"></i>
+                          <p className="font-black uppercase tracking-[0.3em] text-sm">Visual lab is empty</p>
+                       </div>
+                    )}
+                  </div>
+                )}
+             </div>
+          </div>
         </div>
+      </main>
+
+      <SideDrawer isOpen={showHistory} onClose={() => setShowHistory(false)} title="Resource Vault">
+         <div className="space-y-4">
+           {labAssets.length > 0 ? labAssets.map(asset => (
+             <div key={asset.id} className="group flex gap-5 p-5 rounded-3xl bg-slate-50 border border-slate-100 hover:border-amber-400 hover:bg-white transition cursor-pointer shadow-sm">
+                <div className="w-20 h-20 rounded-2xl bg-slate-200 overflow-hidden shrink-0 shadow-inner">
+                  <img src={asset.url} className="w-full h-full object-cover" />
+                </div>
+                <div className="flex-1 min-w-0 flex flex-col justify-center">
+                  <div className="text-[9px] font-black uppercase text-slate-400 mb-1 tracking-widest">Image • {new Date(asset.timestamp).toLocaleDateString()}</div>
+                  <p className="text-sm font-bold text-slate-700 truncate group-hover:text-slate-900">{asset.prompt}</p>
+                </div>
+             </div>
+           )) : (
+             <div className="py-20 text-center text-slate-300">
+               <i className="fa-solid fa-box-open text-4xl mb-4"></i>
+               <p className="text-xs font-black uppercase tracking-widest">Vault is Empty</p>
+             </div>
+           )}
+         </div>
       </SideDrawer>
 
-      <footer className="bg-slate-900 py-20 px-6 border-t border-slate-800 text-slate-400">
-          <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-10">
-              <div className="text-center md:text-left">
-                  <div className="flex items-center gap-2 justify-center md:justify-start mb-4">
-                      <div className="bg-white/10 p-2 rounded-lg"><i className="fa-solid fa-bolt-lightning text-amber-500"></i></div>
-                      <span className="font-extrabold text-xl text-white uppercase tracking-tighter">Every<span className="text-amber-500">Spark</span></span>
-                  </div>
-                  <p className="text-slate-500 text-xs font-medium max-w-sm leading-relaxed">
-                      EverySpark: A National Educational Asset. Empowering South African teachers with elite AI capabilities.
-                  </p>
-              </div>
-              <div className="flex gap-8 text-xs font-bold uppercase tracking-widest">
-                  <a href="#" className="hover:text-amber-400 transition">Our Strategy</a>
-                  <a href="#" className="hover:text-amber-400 transition">Terms of Use</a>
-                  <a href="#" className="hover:text-amber-400 transition">Contact Support</a>
-              </div>
+      <ToolCreator isOpen={isToolCreatorOpen} onClose={() => setIsToolCreatorOpen(false)} onSave={t => setAllTools([...allTools, t])} />
+      
+      <footer className="bg-slate-900 py-12 px-6 border-t border-slate-800">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center text-slate-500 text-[10px] font-black uppercase tracking-widest gap-8">
+          <div className="flex items-center gap-3">
+            <span className="text-white bg-slate-800 px-3 py-1 rounded">EverySpark AI</span>
+            <span className="text-slate-700">|</span>
+            <span>SA CAPS Aligned Education</span>
           </div>
-          <div className="max-w-7xl mx-auto mt-12 pt-8 border-t border-slate-800 text-center text-[10px] text-slate-600 font-bold uppercase tracking-widest">
-              &copy; {new Date().getFullYear()} EverySpark Initiative. Cape Town, ZA.
+          <div className="flex gap-10">
+            <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" className="hover:text-amber-500 transition underline decoration-amber-500/50 underline-offset-4">Cloud Billing</a>
+            <span className="text-slate-700">|</span>
+            <span>v1.3 Educational Build</span>
           </div>
+        </div>
       </footer>
     </div>
   );

@@ -5,11 +5,9 @@ export interface Artifact {
   status: 'streaming' | 'complete' | 'error';
 }
 
-export interface Session {
-    id: string;
-    prompt: string;
-    timestamp: number;
-    artifacts: Artifact[];
+export interface GroundingSource {
+  title?: string;
+  uri?: string;
 }
 
 export interface ToolConfig {
@@ -20,4 +18,12 @@ export interface ToolConfig {
   examplePrompt: string;
   description: string;
   isCustom?: boolean;
+}
+
+export interface LabAsset {
+  id: string;
+  type: 'image';
+  url: string;
+  prompt: string;
+  timestamp: number;
 }

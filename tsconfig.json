@@ -1,6 +1,7 @@
+
 {
   "compilerOptions": {
-    "target": "es5",
+    "target": "ESNext",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "skipLibCheck": true,
@@ -9,7 +10,7 @@
     "noEmit": true,
     "esModuleInterop": true,
     "module": "esnext",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "preserve",
@@ -32,5 +33,5 @@
     "utils.ts",
     ".next/types/**/*.ts"
   ],
-  "exclude": ["node_modules", "vite.config.ts", "dist", "out", ".next"]
+  "exclude": ["node_modules", "dist", "out", ".next"]
 }

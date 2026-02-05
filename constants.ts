@@ -17,6 +17,14 @@ export const TOOLS_CONFIG: ToolConfig[] = [
     examplePrompt: 'Grade 10 Geography: The structure of the Earth and plate tectonics. Focus on active learning for a 60-minute session.'
   },
   {
+    id: 'geography-explorer',
+    categoryId: 'teacher',
+    name: 'Geography Explorer',
+    description: 'Uses Maps grounding to plan field trips or explore locations.',
+    basePrompt: 'Explore geographical locations or plan field trips. Use Google Maps grounding to provide specific place information, reviews, and directions. Always provide links to the places mentioned.',
+    examplePrompt: 'Find 3 educational geography field trip locations near Johannesburg for Grade 9 students focusing on industrial development.'
+  },
+  {
     id: 'assessment-gen',
     categoryId: 'teacher',
     name: 'Assessment Architect',
@@ -31,14 +39,6 @@ export const TOOLS_CONFIG: ToolConfig[] = [
     description: 'Generates structured grading rubrics as beautiful HTML tables.',
     basePrompt: 'Generate a professional assessment rubric in a clean HTML/CSS table format. Ensure criteria are specific, measurable, and aligned with standard school grading bands.',
     examplePrompt: 'Grade 11 English HL: Oral presentation on a Shakespearean sonnet. 4 criteria (Content, Delivery, Language, Visuals).'
-  },
-  {
-    id: 'differentiation-lab',
-    categoryId: 'teacher',
-    name: 'Differentiation Lab',
-    description: 'Adapts content for different learning abilities (Remedial to Enrichment).',
-    basePrompt: 'Take a core concept and differentiate it into three distinct levels: Support (Remedial), Core (Standard), and Extension (Enrichment). Ensure all three are aligned to the same CAPS outcome.',
-    examplePrompt: 'Grade 6 Natural Science: The photosynthesis process. Adapt the content for mixed-ability learners.'
   },
   {
     id: 'quiz-blast',
@@ -57,28 +57,12 @@ export const TOOLS_CONFIG: ToolConfig[] = [
     examplePrompt: 'Scenario: Designing a digital literacy roadmap for a school with limited hardware but high community interest.'
   },
   {
-    id: 'sgb-governance',
-    categoryId: 'leadership',
-    name: 'SGB Governance Advisor',
-    description: 'Professional policy drafting and compliance logic for SGBs.',
-    basePrompt: 'Draft a professional school policy or SGB resolution. Ensure the language is high-tier, legally sound in a South African context, and community-focused.',
-    examplePrompt: 'Drafting a new Code of Conduct for Learners that prioritizes restorative justice and community values.'
-  },
-  {
     id: 'parent-comms',
     categoryId: 'admin',
     name: 'Elite Comms Engine',
     description: 'Automates professional stakeholder communications.',
     basePrompt: 'Draft a professional, empathetic, and clear newsletter or parent communication regarding school updates.',
     examplePrompt: 'Newsletter announcement about the upcoming EverySpark AI launch and how it will benefit student learning outcomes.'
-  },
-  {
-    id: 'fundraising-pro',
-    categoryId: 'admin',
-    name: 'Sponsorship Pitcher',
-    description: 'Generates high-impact corporate sponsorship proposals.',
-    basePrompt: 'Write a corporate-grade sponsorship proposal for a school project. Focus on ROI for the corporate partner and Social Economic Development (SED) points.',
-    examplePrompt: 'Pitching to a local bank to sponsor a new science lab. Highlight naming rights and community impact metrics.'
   },
   {
     id: 'study-guide',

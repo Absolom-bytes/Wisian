@@ -3,7 +3,6 @@ node_modules/
 .git/
 .wrangler/
 bun.lockb
-package-lock.json
 tsconfig.json
 next.config.mjs
 vercel.json

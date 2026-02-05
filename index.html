@@ -1,10 +1,25 @@
-<script type="importmap">
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EverySpark AI</title>
+    <script type="importmap">
 {
   "imports": {
     "@google/genai": "https://esm.sh/@google/genai@^1.39.0",
-    "react/": "https://esm.sh/react@^19.2.4/",
-    "react": "https://esm.sh/react@^19.2.4",
-    "next": "https://esm.sh/next@^16.1.6"
+    "react": "https://esm.sh/react@^19.0.0",
+    "react-dom": "https://esm.sh/react-dom@^19.0.0",
+    "react-dom/client": "https://esm.sh/react-dom@^19.0.0/client",
+    "next": "https://esm.sh/next@^15.2.0",
+    "react/": "https://esm.sh/react@^19.2.4/"
   }
 }
 </script>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+</body>
+</html>
